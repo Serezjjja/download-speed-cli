@@ -1,36 +1,29 @@
 import http from 'node:http';
 import https from 'node:https';
-import { performance } from 'node:perf_hooks';
 
 const requestCount = 10;
-const idleTimeoutMs = 30_000;
 const bytesPerMebibyte = 1024 ** 2;
 
-function download(url) {
+async function downloadBytes(url) {
   const client = url.protocol === 'https:' ? https : http;
-
-  return new Promise((resolve, reject) => {
-    const start = performance.now();
-    const request = client.get(url, { timeout: idleTimeoutMs }, (response) => {
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        response.destroy();
-        reject(new Error(`HTTP ${response.statusCode}. Укажите конечный URL с ответом 2xx.`));
-        return;
-      }
-
-      let bytes = 0;
-      response.on('error', reject);
-      response.on('data', (chunk) => { bytes += chunk.length; });
-      response.on('end', () => {
-        resolve({ bytes, elapsedMs: performance.now() - start });
-      });
-    });
-
+  const response = await new Promise((resolve, reject) => {
+    const request = client.get(url, resolve);
     request.on('error', reject);
-    request.on('timeout', () => {
+    request.setTimeout(30_000, () => {
       request.destroy(new Error('Соединение бездействовало 30 секунд.'));
     });
   });
+
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    response.destroy();
+    throw new Error(`HTTP ${response.statusCode}. Укажите конечный URL с ответом 2xx.`);
+  }
+
+  let bytes = 0;
+  for await (const chunk of response) {
+    bytes += chunk.length;
+  }
+  return bytes;
 }
 
 async function main(args) {
@@ -45,19 +38,20 @@ async function main(args) {
   let totalBytes = 0;
   let totalMs = 0;
   for (let i = 1; i <= requestCount; i++) {
+    const start = performance.now();
     try {
-      const { bytes, elapsedMs } = await download(url);
-      totalBytes += bytes;
-      totalMs += elapsedMs;
+      totalBytes += await downloadBytes(url);
     } catch (error) {
       throw new Error(`Запрос ${i} из ${requestCount}: ${error.message}`);
     }
+    totalMs += performance.now() - start;
   }
 
-  const speed = (totalBytes / bytesPerMebibyte) / (totalMs / 1000);
-  console.log(`Среднее время запроса: ${(totalMs / requestCount).toFixed(2)} мс`);
+  const averageMs = totalMs / requestCount;
+  const speedMiBPerSecond = (totalBytes / bytesPerMebibyte) / (totalMs / 1000);
+  console.log(`Среднее время запроса: ${averageMs.toFixed(2)} мс`);
   console.log(`Всего скачано: ${totalBytes} байт`);
-  console.log(`Скорость скачивания: ${speed.toFixed(3)} МиБ/с`);
+  console.log(`Скорость скачивания: ${speedMiBPerSecond.toFixed(3)} МиБ/с`);
 }
 
 main(process.argv.slice(2)).catch((error) => {
