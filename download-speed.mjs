@@ -6,9 +6,11 @@ const bytesPerMebibyte = 1024 ** 2;
 
 async function downloadBytes(url) {
   const client = url.protocol === 'https:' ? https : http;
+  // get() вызывает resolve, когда пришли заголовки. Тело ответа в этот момент ещё может загружаться.
   const response = await new Promise((resolve, reject) => {
     const request = client.get(url, resolve);
     request.on('error', reject);
+    // Загрузка может идти дольше 30 секунд, пока по сокету поступают данные.
     request.setTimeout(30_000, () => {
       request.destroy(new Error('Соединение бездействовало 30 секунд.'));
     });
@@ -20,6 +22,7 @@ async function downloadBytes(url) {
   }
 
   let bytes = 0;
+  // Считаем байты блоками. Если сервер прислал gzip, получим размер сжатого тела.
   for await (const chunk of response) {
     bytes += chunk.length;
   }
@@ -40,6 +43,7 @@ async function main(args) {
   for (let i = 1; i <= requestCount; i++) {
     const start = performance.now();
     try {
+      // await ждёт конца тела, поэтому следующий запрос начнётся только после полной загрузки.
       totalBytes += await downloadBytes(url);
     } catch (error) {
       throw new Error(`Запрос ${i} из ${requestCount}: ${error.message}`);
@@ -48,6 +52,7 @@ async function main(args) {
   }
 
   const averageMs = totalMs / requestCount;
+  // Деление общего объёма на общее время учитывает разную длительность запросов.
   const speedMiBPerSecond = (totalBytes / bytesPerMebibyte) / (totalMs / 1000);
   console.log(`Среднее время запроса: ${averageMs.toFixed(2)} мс`);
   console.log(`Всего скачано: ${totalBytes} байт`);
